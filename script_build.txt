@@ -1,1 +1,1 @@
-python -m nuitka --standalone --onefile --windows-disable-console --assume-yes-for-downloads --output-dir=dist --output-filename=WatchdogWatchers.exe --windows-uac-admin watchdog.py
+python -m nuitka --standalone --onefile --windows-disable-console --assume-yes-for-downloads --output-dir=dist --output-filename=WatchersService.exe --windows-uac-admin --remove-output main.py
