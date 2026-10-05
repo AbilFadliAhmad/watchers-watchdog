@@ -6,6 +6,7 @@ import threading
 import time
 from capture_image import capture_winlogon_desktop
 from service_logger import log_error, log_info
+from update_agent import update_agent, is_downloading, download_percentage
 
 TARGET_PROCESS = "WatchersAgent.exe"
 TASK_NAME = "WatchersAgentTask"
@@ -141,11 +142,32 @@ def run_ipc_server():
             elif data == "GET_WINLOGON_FRAME":
                 frame_bytes = capture_winlogon_desktop()
                 conn.sendall(frame_bytes)
+            elif data.startswith("TRIGGER_UPDATE:"):
+                download_url = data.split("TRIGGER_UPDATE:", 1)[1]
+
+                if is_downloading:
+                    log_info(
+                        f"[IPC Command] Pemicuan diabaikan. Download sedang"
+                        f" berlangsung ({download_percentage}%)..."
+                    )
+                else:
+                    log_info(
+                        f"[IPC Command] Menerima instruksi update:"
+                        f" {download_url}"
+                    )
+                    update_thread = threading.Thread(
+                        target=run_background_silent_update,
+                        args=(download_url,),
+                        daemon=True,
+                    )
+                    update_thread.start()
+
+                # Kembalikan persentase unduhan terkini ke Agent via Socket IPC
+                conn.sendall(str(download_percentage).encode("utf-8"))
 
             conn.close()
     except Exception as e:
         log_error(f"[IPC Server] Error pada server socket: {e}")
-
 
 def main():
     ipc_thread = threading.Thread(target=run_ipc_server, daemon=True)
