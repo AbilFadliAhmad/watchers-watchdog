@@ -6,7 +6,7 @@ import threading
 import time
 from capture_image import capture_winlogon_desktop
 from service_logger import log_error, log_info
-from update_agent import update_agent, is_downloading, download_percentage
+from update_agent import is_downloading, download_percentage
 
 TARGET_PROCESS = "WatchersAgent.exe"
 TASK_NAME = "WatchersAgentTask"
