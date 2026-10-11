@@ -3,16 +3,17 @@ import subprocess
 import threading
 import urllib.request
 from service_logger import log_error, log_info
+import hashlib
 
 # --- STATE GLOBAL UNDUHAN ---
 download_percentage = 0.0
 is_downloading = False
 download_lock = threading.Lock()
 
-def run_background_silent_update(download_url: str):
-    """Mendownload installer secara chunked dengan tracking persen.
+def run_background_silent_update(download_url: str, sha256_hash: str):
+    """Mendownload installer secara chunked, memverifikasi integritas SHA-256,
 
-    Mengabaikan eksekusi jika unduhan sedang berjalan.
+    dan mengeksekusi installer secara silent jika verifikasi valid.
     """
     global download_percentage, is_downloading
 
@@ -36,22 +37,44 @@ def run_background_silent_update(download_url: str):
         downloaded_size = 0
         chunk_size = 64 * 1024  # 64 KB
 
+        # Inisialisasi hasher SHA-256
+        hasher = hashlib.sha256()
+
         with open(setup_path, "wb") as f:
             while True:
                 chunk = req.read(chunk_size)
                 if not chunk:
                     break
+
                 f.write(chunk)
+                hasher.update(chunk)  # Hitung hash secara bersamaan saat stream
                 downloaded_size += len(chunk)
 
                 if total_size > 0:
-                    # Hitung persentase desimal (misal: 45.5)
                     download_percentage = round(
                         (downloaded_size / total_size) * 100, 1
                     )
 
+        # -----------------------------------------------------------------
+        # VERIFIKASI INTEGRITAS SHA-256
+        # -----------------------------------------------------------------
+        calculated_sha256 = hasher.hexdigest().lower()
+        expected_sha256 = sha256_hash.strip().lower() if sha256_hash else ""
+
+        if expected_sha256 and calculated_sha256 != expected_sha256:
+            log_error(
+                f"[UPDATE ERROR] Verifikasi SHA-256 gagal!\n"
+                f" - Expected : {expected_sha256}\n"
+                f" - Actual   : {calculated_sha256}"
+            )
+            # Hapus file corrupt/tidak cocok untuk alasan keamanan
+            if os.path.exists(setup_path):
+                os.remove(setup_path)
+            return
+
         log_info(
-            "[UPDATE] Pengunduhan selesai (100%). Menjalankan installer..."
+            f"[UPDATE] Pengunduhan & verifikasi SHA-256 berhasil"
+            f" ({calculated_sha256[:10]}...). Menjalankan installer..."
         )
 
         DETACHED_PROCESS = 0x00000008
@@ -66,6 +89,12 @@ def run_background_silent_update(download_url: str):
 
     except Exception as e:
         log_error(f"[UPDATE ERROR] Gagal mengeksekusi silent update: {e}")
+        # Hapus file installer jika terjadi kegagalan jaringan atau parsing
+        if os.path.exists(setup_path):
+            try:
+                os.remove(setup_path)
+            except Exception:
+                pass
     finally:
         # Reset state setelah selesai atau jika terjadi error
         with download_lock:

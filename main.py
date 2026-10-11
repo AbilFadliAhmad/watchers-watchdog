@@ -6,7 +6,7 @@ import threading
 import time
 from capture_image import capture_winlogon_desktop
 from service_logger import log_error, log_info
-from update_agent import is_downloading, download_percentage
+from update_agent import is_downloading, download_percentage, run_background_silent_update
 
 TARGET_PROCESS = "WatchersAgent.exe"
 TASK_NAME = "WatchersAgentTask"
@@ -143,7 +143,14 @@ def run_ipc_server():
                 frame_bytes = capture_winlogon_desktop()
                 conn.sendall(frame_bytes)
             elif data.startswith("TRIGGER_UPDATE:"):
-                download_url = data.split("TRIGGER_UPDATE:", 1)[1]
+                payload_content = data.split("TRIGGER_UPDATE:", 1)[1]
+
+                # Ekstrak download_url dan sha256_hash dari payload (split dari kanan)
+                if ":" in payload_content:
+                    download_url, sha256_hash = payload_content.rsplit(":", 1)
+                else:
+                    download_url = payload_content
+                    sha256_hash = ""
 
                 if is_downloading:
                     log_info(
@@ -152,12 +159,14 @@ def run_ipc_server():
                     )
                 else:
                     log_info(
-                        f"[IPC Command] Menerima instruksi update:"
-                        f" {download_url}"
+                        f"[IPC Command] Menerima instruksi update:\n"
+                        f" - URL  : {download_url}\n"
+                        f" - Hash : {sha256_hash}"
                     )
+                    # Sampaikan URL dan sha256_hash ke fungsi background thread
                     update_thread = threading.Thread(
                         target=run_background_silent_update,
-                        args=(download_url,),
+                        args=(download_url, sha256_hash),
                         daemon=True,
                     )
                     update_thread.start()
