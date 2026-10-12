@@ -95,13 +95,17 @@ def run_background_silent_update(download_url: str, sha256_hash: str):
         CREATE_NO_WINDOW = 0x08000000
         log_path = os.path.join(os.path.dirname(os.path.abspath(setup_path)), 'update.log')
         print(f"[UPDATE] Log update akan disimpan di: {log_path}")
+        log_info(f"[UPDATE] Log update akan disimpan di: {log_path}")
         # Eksekusi installer secara detached
+        cmd_command = f'cmd.exe /c start "" "{setup_path}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{log_path}"'
         subprocess.Popen(
-            [setup_path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/LOG={log_path}"],
-            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
-            close_fds=True,
+            cmd_command,
+            shell=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
+        
         print(f"[UPDATE] Installer dijalankan secara silent. Log update: {log_path}")
+        log_info(f"[UPDATE] Installer dijalankan secara silent. Log update: {log_path}")
 
     except Exception as e:
         log_error(f"[UPDATE ERROR] Gagal mengeksekusi silent update: {e}")
