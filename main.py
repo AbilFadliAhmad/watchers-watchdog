@@ -6,7 +6,7 @@ import threading
 import time
 from capture_image import capture_winlogon_desktop
 from service_logger import log_error, log_info
-from update_agent import is_downloading, download_percentage, run_background_silent_update
+import update_agent  # Impor modul update_agent untuk mengakses variabel global
 
 TARGET_PROCESS = "WatchersAgent.exe"
 TASK_NAME = "WatchersAgentTask"
@@ -152,31 +152,40 @@ def run_ipc_server():
                     download_url = payload_content
                     sha256_hash = ""
 
-                if is_downloading:
+                if update_agent.is_downloading:
                     log_info(
                         f"[IPC Command] Pemicuan diabaikan. Download sedang"
-                        f" berlangsung ({download_percentage}%)..."
+                        f" berlangsung ({update_agent.download_percentage}%)..."
                     )
+                    print(f"[IPC Server] Unduhan sedang berjalan: {update_agent.download_percentage}%")
                 else:
                     log_info(
                         f"[IPC Command] Menerima instruksi update:\n"
                         f" - URL  : {download_url}\n"
                         f" - Hash : {sha256_hash}"
                     )
+                    print(f"[IPC Server] Memulai proses update di background thread... {update_agent.download_percentage}%")
                     # Sampaikan URL dan sha256_hash ke fungsi background thread
                     update_thread = threading.Thread(
-                        target=run_background_silent_update,
+                        target=update_agent.run_background_silent_update,
                         args=(download_url, sha256_hash),
                         daemon=True,
                     )
                     update_thread.start()
 
                 # Kembalikan persentase unduhan terkini ke Agent via Socket IPC
-                conn.sendall(str(download_percentage).encode("utf-8"))
+                print(f"[IPC Server] Mengirim persentase unduhan: {update_agent.download_percentage}%")
+                conn.sendall(str(update_agent.download_percentage).encode("utf-8"))
 
             conn.close()
     except Exception as e:
         log_error(f"[IPC Server] Error pada server socket: {e}")
+
+def update_percentage(new_percentage):
+    """Memperbarui persentase unduhan secara thread-safe."""
+    global download_percentage
+    download_percentage = new_percentage
+    print(f"[UPDATE] Persentase unduhan diperbarui: {download_percentage}%")
 
 def main():
     ipc_thread = threading.Thread(target=run_ipc_server, daemon=True)
