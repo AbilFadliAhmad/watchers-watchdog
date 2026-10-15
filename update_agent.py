@@ -1,26 +1,19 @@
+from datetime import datetime
+import hashlib
 import os
 import subprocess
 import threading
-from timeit import main
 import urllib.request
 from service_logger import log_error, log_info
-import hashlib
 
-# --- STATE GLOBAL UNDUHAN ---
 is_downloading = False
 download_percentage = 0.0
 download_lock = threading.Lock()
 
+
 def run_background_silent_update(download_url: str, sha256_hash: str):
-    """Mendownload installer secara chunked, memverifikasi integritas SHA-256,
-
-    dan mengeksekusi installer secara silent jika verifikasi valid.
-    """
     global is_downloading, download_percentage
-    print(f"[UPDATE] Memulai proses update di background thread... {download_percentage}%")
 
-
-    # CEK & KUNCI STATE: Jangan ulangi jika sedang mendownload
     with download_lock:
         if is_downloading:
             log_info(
@@ -30,13 +23,19 @@ def run_background_silent_update(download_url: str, sha256_hash: str):
             return
         is_downloading = True
 
-    temp_dir = os.environ.get("TEMP", "C:\\Windows\\Temp")
-    setup_path = os.path.join(temp_dir, "WatchersClient_Update.exe")
+    # 1. Samakan Timestamp untuk Nama Installer & File Log
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    base_programdata = os.environ.get("ProgramData", r"C:\ProgramData")
+    temp_dir = os.environ.get("TEMP", r"C:\Windows\Temp")
+
+    setup_path = os.path.join(temp_dir, f"WatchersAgent_{timestamp}.exe")
+    log_path = os.path.join(base_programdata, f"watchers_update_{timestamp}.log")
+    app_dir = os.path.join(base_programdata, "WatchersAgent")
+    uninstaller_path = os.path.join(app_dir, "unins000.exe")
 
     try:
         log_info(f"[UPDATE] Memulai pengunduhan dari: {download_url}")
 
-        # Tambahkan User-Agent untuk menghindari pemblokiran HTTP 403 oleh server/Nginx/Cloudflare
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -45,12 +44,11 @@ def run_background_silent_update(download_url: str, sha256_hash: str):
         }
         req = urllib.request.Request(download_url, headers=headers)
 
+        # 2. Unduh Langsung ke setup_path yang Sudah Didefinisikan
         with urllib.request.urlopen(req) as response:
             total_size = int(response.headers.get("Content-Length", 0))
             downloaded_size = 0
-            chunk_size = 64 * 1024  # 64 KB
-
-            # Inisialisasi hasher SHA-256
+            chunk_size = 64 * 1024
             hasher = hashlib.sha256()
 
             with open(setup_path, "wb") as f:
@@ -58,20 +56,16 @@ def run_background_silent_update(download_url: str, sha256_hash: str):
                     chunk = response.read(chunk_size)
                     if not chunk:
                         break
-
                     f.write(chunk)
-                    hasher.update(chunk)  # Hitung hash bersamaan saat stream
+                    hasher.update(chunk)
                     downloaded_size += len(chunk)
 
-                    print(f"[UPDATE] Mengunduh: {downloaded_size}/{total_size} bytes")
                     if total_size > 0:
                         download_percentage = round(
                             (downloaded_size / total_size) * 100, 1
-                        )  # Memperbarui persentase
+                        )
 
-        # -----------------------------------------------------------------
-        # VERIFIKASI INTEGRITAS SHA-256
-        # -----------------------------------------------------------------
+        # 3. Verifikasi Integrity SHA-256
         calculated_sha256 = hasher.hexdigest().lower()
         expected_sha256 = sha256_hash.strip().lower() if sha256_hash else ""
 
@@ -81,7 +75,6 @@ def run_background_silent_update(download_url: str, sha256_hash: str):
                 f" - Expected : {expected_sha256}\n"
                 f" - Actual   : {calculated_sha256}"
             )
-            # Hapus file corrupt/tidak cocok untuk alasan keamanan
             if os.path.exists(setup_path):
                 os.remove(setup_path)
             return
@@ -91,32 +84,59 @@ def run_background_silent_update(download_url: str, sha256_hash: str):
             f" ({calculated_sha256[:10]}...). Menjalankan installer..."
         )
 
+        # 4. Delegasikan Eksekusi ke Batch Script (.bat) untuk menghindari Deadlock
+        bat_path = os.path.join(temp_dir, "run_update.bat")
+        
+        with open(bat_path, "w") as bat_file:
+            bat_file.write("@echo off\n")
+            
+            # Beri jeda 3 detik agar WatchersAgent (Python) punya waktu untuk mati 100% 
+            # dan Windows melepas file lock sebelum uninstaller bekerja.
+            bat_file.write("timeout /t 3 /nobreak >nul\n") 
+
+            # Tanpa menjalankan Uninstaller memang bisa tapi client akan ada jeda 
+            # sekitar 5-10 detik sebelum installer baru bisa menimpa file lama. 
+            # Sehingga lebih baik menjalankan Uninstaller terlebih dahulu jika ada.
+            if os.path.exists(app_dir) and os.path.exists(uninstaller_path):
+                            # Uninstaller berjalan baris per baris (sinkronus) di CMD
+                            bat_file.write(f'"{uninstaller_path}" /VERYSILENT /SUPPRESSMSGBOXES "_?={app_dir}"\n')
+                        
+            
+            # Jalankan Installer Baru
+            bat_file.write(f'"{setup_path}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{log_path}"\n')
+
+            # Hapus file installer (.exe) setelah instalasi selesai tuntas
+            bat_file.write(f'if exist "{setup_path}" del /f /q "{setup_path}"\n')
+
+            # Perintah ini akan menghapus file run_update.bat ini sendiri setelah selesai
+            bat_file.write('(goto) 2>nul & del "%~f0"\n')
+
         DETACHED_PROCESS = 0x00000008
         CREATE_NO_WINDOW = 0x08000000
-        log_path = os.path.join(os.path.dirname(os.path.abspath(setup_path)), 'update.log')
-        print(f"[UPDATE] Log update akan disimpan di: {log_path}")
-        log_info(f"[UPDATE] Log update akan disimpan di: {log_path}")
-        # Eksekusi installer secara detached
-        cmd_command = f'cmd.exe /c start "" "{setup_path}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{log_path}"'
+
+        # Jalankan file bat secara lepas (detached)
         subprocess.Popen(
-            cmd_command,
-            shell=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
+            ["cmd.exe", "/c", bat_path],
+            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+            close_fds=True
         )
-        
-        print(f"[UPDATE] Installer dijalankan secara silent. Log update: {log_path}")
-        log_info(f"[UPDATE] Installer dijalankan secara silent. Log update: {log_path}")
+
+        log_info(f"[END] Batch script untuk silent update telah dijalankan: {bat_path}")
+        log_info (f"[END] Installer baru akan dijalankan secara silent. Log update akan disimpan di: {log_path}")
+        log_info(f"[END] Script instalasi dipicu. Mematikan Agent seketika untuk mencegah Deadlock.")
+
+        # WAJIB: Hentikan aplikasi Agent ini secara paksa (Seketika)
+        # File lock akan terlepas, uninstaller bebas bekerja, dan aplikasi tidak akan membalas socket lagi.
+        os._exit(0)
 
     except Exception as e:
         log_error(f"[UPDATE ERROR] Gagal mengeksekusi silent update: {e}")
-        # Hapus file installer jika terjadi kegagalan jaringan atau parsing
         if os.path.exists(setup_path):
             try:
                 os.remove(setup_path)
             except Exception:
                 pass
     finally:
-        # Reset state setelah selesai atau jika terjadi error
         with download_lock:
             is_downloading = False
             download_percentage = 0.0

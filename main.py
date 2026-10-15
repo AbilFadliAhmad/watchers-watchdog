@@ -70,9 +70,8 @@ def kill_process_by_pid_fast(pid: int):
 
 
 def trigger_agent_task_fast():
-    """Memicu Task Scheduler secara instan tanpa delay time.sleep."""
+    """Memicu Task Scheduler secara instan dan mencatat error asli dari Windows."""
     try:
-        # Panggil schtasks /run secara langsung
         result = subprocess.run(
             f'schtasks /run /tn "{TASK_NAME}"',
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -80,24 +79,35 @@ def trigger_agent_task_fast():
             text=True,
         )
 
-        # Jika task tersangkut dalam status 'Running', paksa reset dan jalankan kembali
+        # Jika task gagal atau tersangkut, coba reset
         if result.returncode != 0:
             subprocess.run(
                 f'schtasks /end /tn "{TASK_NAME}"',
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            subprocess.run(
+            retry_result = subprocess.run(
                 f'schtasks /run /tn "{TASK_NAME}"',
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True,
+                text=True,
             )
-            log_info(
-                f"[✓] Berhasil mereset & memicu task '{TASK_NAME}' via Task"
-                " Scheduler."
-            )
+
+            if retry_result.returncode == 0:
+                log_info(
+                    f"[✓] Berhasil mereset & memicu task '{TASK_NAME}' via Task"
+                    " Scheduler."
+                )
+            else:
+                # Catat pesan error asli dari schtasks
+                err_msg = (
+                    retry_result.stderr.strip() or result.stderr.strip()
+                )
+                log_error(
+                    f"[!] Gagal memicu task '{TASK_NAME}' (Code:"
+                    f" {retry_result.returncode}): {err_msg}"
+                )
         else:
-            log_info(
-                f"[✓] Berhasil memicu task '{TASK_NAME}' via Task Scheduler."
-            )
+            log_info(f"[✓] Berhasil memicu task '{TASK_NAME}' via Task Scheduler.")
 
     except Exception as e:
         log_error(f"Exception saat memicu {TASK_NAME}: {e}")
